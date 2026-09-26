@@ -9,6 +9,11 @@
 //! a tier that fails to assemble or audit is left out with a warning, and
 //! src/asm/ffi.rs only offers the tiers built (`cfg(ttfx_asm_tier = "n")`).
 //!
+//! Each tier goes through tools/asm/jcc-pad.py, which moves every branch that
+//! would cross or end on a 32-byte boundary (Intel's JCC erratum keeps such
+//! code out of the uop cache on Skylake-derived cores) with redundant prefixes
+//! and NOPs. `TTFX_ASM_JCC_PAD=0` assembles the source as written.
+//!
 //! `TTFX_ASM_UNCHECKED_TIERS=1` links every tier without NASM's CPU level or
 //! the audit: a development build for checking lower tiers' output on a CPU
 //! that runs everything. Its lower tiers may crash on real older CPUs.
@@ -24,6 +29,8 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(ttfx_asm_tier, values(\"1\", \"2\", \"3\", \"4\"))");
     println!("cargo::rerun-if-changed=asm");
     println!("cargo::rerun-if-changed=tools/asm/isa-audit.sh");
+    println!("cargo::rerun-if-changed=tools/asm/jcc-pad.py");
+    println!("cargo::rerun-if-env-changed=TTFX_ASM_JCC_PAD");
     println!("cargo::rerun-if-env-changed=NASM");
     println!("cargo::rerun-if-env-changed=TTFX_ASM_UNCHECKED_TIERS");
 
@@ -37,27 +44,41 @@ fn main() {
     let nasm = env::var("NASM").unwrap_or_else(|_| "nasm".to_string());
     let unchecked = env::var("TTFX_ASM_UNCHECKED_TIERS").is_ok_and(|v| v == "1");
 
+    // No NASM: build the pure-Rust engine rather than failing the build.
+    if let Err(e) = Command::new(&nasm).arg("-v").stdout(Stdio::null()).status() {
+        println!(
+            "cargo::warning=NASM not found ({nasm}: {e}); building without the assembly \
+             engine. Install NASM >= 3.0 (pacman -S nasm) or point NASM= at it."
+        );
+        return;
+    }
+    // Lay each tier's branches out around the JCC erratum (tools/asm/jcc-pad.py)
+    // unless TTFX_ASM_JCC_PAD=0 or there is no python3 to do it.
+    let pad = env::var("TTFX_ASM_JCC_PAD").map_or(true, |v| v != "0")
+        && Command::new("python3").arg("--version").stdout(Stdio::null()).status().is_ok();
+    if !pad {
+        println!("cargo::warning=asm branches not laid out for the JCC erratum (needs python3)");
+    }
+
     // Assemble the four tiers in parallel.
     let mut jobs = Vec::new();
     for tier in TIERS {
         let object = out.join(format!("ttfx_asm_v{tier}.o"));
-        let mut command = Command::new(&nasm);
+        let mut command = if pad {
+            let mut c = Command::new("python3");
+            c.arg("tools/asm/jcc-pad.py").arg(&nasm).arg(&object);
+            c
+        } else {
+            let mut c = Command::new(&nasm);
+            c.arg("-o").arg(&object);
+            c
+        };
         command.args(["-f", "elf64", "-O3", "-I", "asm/"]).arg(format!("-DTIER={tier}"));
         if unchecked {
             command.arg("-DTTFX_NO_CPU_CHECK");
         }
-        command.arg("-o").arg(&object).arg("asm/lib.asm").stderr(Stdio::piped());
-        match command.spawn() {
-            Ok(child) => jobs.push((tier, object, child)),
-            // No NASM: build the pure-Rust engine rather than failing the build.
-            Err(e) => {
-                println!(
-                    "cargo::warning=NASM not found ({nasm}: {e}); building without the assembly \
-                     engine. Install NASM >= 3.0 (pacman -S nasm) or point NASM= at it."
-                );
-                return;
-            }
-        }
+        command.arg("asm/lib.asm").stderr(Stdio::piped());
+        jobs.push((tier, object, command.spawn().expect("NASM")));
     }
     let mut built = Vec::new();
     for (tier, object, child) in jobs {

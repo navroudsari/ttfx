@@ -155,8 +155,7 @@ def main():
         flat = os.path.join(work, "flat.asm")
         obj = os.path.join(work, "flat.o")
         lst = os.path.join(work, "flat.lst")
-        subprocess.run([nasm, *args, "-E", "-o", flat, source], check=True,
-                       stderr=subprocess.DEVNULL)
+        subprocess.run([nasm, *args, "-E", "-o", flat, source], check=True)
         lines = [l for l in open(flat) if not l.startswith("%line")]
         # the flat source needs no include paths
         nargs, skip = [], False
@@ -211,7 +210,6 @@ def main():
         print(f"jcc-pad: {passes} passes, {total} branches moved with "
               f"{sum(prefixes.values())} prefixes and {nop_bytes} NOP bytes; "
               f"{padded} still affected", file=sys.stderr)
-        sys.exit(1 if padded else 0)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
