@@ -42,7 +42,8 @@ colorshift_build:
     push    r13
     push    r14
     push    r15
-    sub     rsp, 24                     ; [rsp] = frame counter, [rsp+8] = spectrum index
+    sub     rsp, 24                     ; [rsp] = frame counter, [rsp+8] = spectrum
+                                        ; index, [rsp+16] = the symbol's memo entry
     call    cs_final_color_map
     call    cs_gradient
     mov     edi, FILTER_INPUT
@@ -70,6 +71,7 @@ colorshift_build:
     mov     rdi, [rax + rbp * 8]
     call    cs_symbol_handles
     mov     r15, rax
+    mov     [rsp + 16], rdx
     mov     rax, [cs_len]
     mov     [rsp], rax
 .frame:
@@ -95,12 +97,37 @@ colorshift_build:
     xor     eax, eax
 .wrapped:
     mov     [rsp + 8], rax
+    call    cs_borrows
+    jnz     .next_frame
     mov     edi, r14d
     mov     rdx, [effect_config]
     mov     edx, [rdx + COLORSHIFT.frames]
     call    scene_add_frame_visual
+.next_frame:
     dec     qword [rsp]
     jnz     .frame
+    ; the visuals exist (made in the same order as before); plain frames
+    ; are a view of the symbol's cycle from k on, which [rsp + 8] is again
+    call    cs_borrows
+    jz      .own_frames
+    mov     rdx, [rsp + 16]
+    mov     rsi, [rdx + 16]
+    test    rsi, rsi
+    jnz     .have_cycle
+    call    cs_cycle_frames
+    mov     rdx, [rsp + 16]
+    mov     [rdx + 16], rax
+    mov     rsi, rax
+.have_cycle:
+    mov     rax, [rsp + 8]
+    lea     rsi, [rsi + rax * FRAME_SIZE]
+    mov     edi, r14d
+    mov     rdx, [cs_len]
+    mov     rcx, [effect_config]
+    mov     ecx, [rcx + COLORSHIFT.frames]
+    imul    ecx, edx
+    call    scene_borrow_frames
+.own_frames:
     ; the last color shown: spectrum[k - 1], wrapping
     mov     rax, [rsp + 8]
     test    rax, rax
@@ -247,35 +274,78 @@ cs_symbol_handles:
     mov     rax, 0x9e3779b97f4a7c15
     imul    rax, rdi
     shr     rax, 64 - CS_MEMO_BITS
-    shl     eax, 4
-    lea     rcx, [cs_memo]
-    add     rcx, rax
-    mov     rax, [rcx + 8]
+    shl     eax, 5
+    lea     rdx, [cs_memo]
+    add     rdx, rax
+    mov     rax, [rdx + 8]
     test    rax, rax
     jz      .miss
-    cmp     [rcx], rdi
+    cmp     [rdx], rdi
     jne     .miss
     ret
 .miss:
-    mov     [rcx], rdi
+    mov     [rdx], rdi
+    mov     qword [rdx + 16], 0         ; no cycle for this symbol yet
     test    rax, rax
     jz      .fresh
-    mov     rdx, rax                    ; a collision: clear the array
+    push    rdx                         ; a collision: clear the array
+    mov     rdx, rax
     mov     rdi, rax
     mov     rcx, [cs_len]
     xor     eax, eax
     rep     stosd
     mov     rax, rdx
+    pop     rdx
     ret
 .fresh:
-    push    rcx
-    push    rdi
+    push    rdx
     mov     rdi, [cs_len]
     shl     rdi, 2
     call    alloc
-    pop     rdi
-    pop     rcx
-    mov     [rcx + 8], rax
+    pop     rdx
+    mov     [rdx + 8], rax
+    ret
+
+; cs_borrows(r14d=the gradient scene) -> ZF clear when its frames can be a
+; view of the symbol's cycle (cs_cycle_frames): scene_add_frame_visual would
+; store the cached visuals as they are - no preexisting colors to rebuild
+; them with - and the duration is valid (else it fails, as before).
+; Clobbers rax, rcx.
+cs_borrows:
+    SCENE_PTR rcx, r14
+    test    dword [rcx + SC_FLAGS], SCF_PREEXISTING | SCF_PRE_BOLD
+    jnz     .no
+    mov     rax, [effect_config]
+    cmp     dword [rax + COLORSHIFT.frames], 1
+    jl      .no
+    or      eax, 1                      ; ZF clear
+    ret
+.no:
+    xor     eax, eax
+    ret
+
+; cs_cycle_frames(r15=the symbol's handles, all made) -> rax = its frames
+; twice over (2 * cs_len of them, each gradient_frames long): every
+; rotation of the cycle is a run of cs_len of them, which characters with
+; this symbol borrow. Clobbers rcx, rdx, rsi, rdi, r8, r9.
+cs_cycle_frames:
+    mov     rdi, [cs_len]
+    shl     rdi, FRAME_SHIFT + 1
+    call    alloc
+    mov     rcx, [cs_len]
+    mov     rdx, [effect_config]
+    mov     edx, [rdx + COLORSHIFT.frames]
+    shl     rdx, 32                     ; FR_DURATION
+    xor     r8d, r8d
+.frame:
+    mov     esi, [r15 + r8 * 4]         ; FR_HANDLE
+    or      rsi, rdx
+    mov     [rax + r8 * FRAME_SIZE], rsi
+    lea     r9, [rcx + r8]
+    mov     [rax + r9 * FRAME_SIZE], rsi
+    inc     r8
+    cmp     r8, rcx
+    jb      .frame
     ret
 
 ; cs_pair_gradient(rax=end color, r8=out) -> eax = length:
@@ -503,4 +573,4 @@ cs_symbol:          resq 1
 cs_pair:            resq 2
 cs_fg_spectrum:     resq 16
 cs_bg_spectrum:     resq 16
-cs_memo:            resq 2 << CS_MEMO_BITS  ; (symbol, *u32 handles)
+cs_memo:            resq 4 << CS_MEMO_BITS  ; (symbol, *u32 handles, *cycle, -)

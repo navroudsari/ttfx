@@ -35,6 +35,7 @@
 
 ; shared frame lists (see scene_share)
 %define SCF_SHARED          (1 << 16)   ; looked up since the last append
+%define SCF_BORROWED        (1 << 17)   ; frames are a view of someone's list
 %define SHARE_MAX_FRAMES    64
 %define SHARE_BITS          16
 %define SHARE_SIZE          (1 << SHARE_BITS)   ; 16-byte entries: list, count, tag
@@ -345,7 +346,7 @@ scene_append_frame:
     add     [r8 + SC_EASE_TOTAL], edx
     lea     esi, [rcx + 1]
     mov     [r8 + SC_COUNT], esi
-    and     dword [r8 + SC_FLAGS], ~(SCF_SHAPE | SCF_SHARED)
+    and     dword [r8 + SC_FLAGS], ~(SCF_SHAPE | SCF_SHARED | SCF_BORROWED)
     cmp     ecx, [r8 + SC_HEAD]
     jne     .done
     mov     [r8 + SC_HEAD_HANDLE], eax
@@ -364,6 +365,28 @@ scene_append_frame:
     rep     movsb
     mov     ecx, [r8 + SC_COUNT]
     jmp     .append
+
+; scene_borrow_frames(edi=scene, rsi=frames, edx=count, ecx=the durations'
+; sum): give a new, empty scene a view of a frame list someone else keeps
+; (count >= 1 frames, never written again) instead of a copy of its own:
+; scene_add_frame_visual for each frame, but characters that play the same
+; frames then share their cache lines. The list lies outside the frame
+; region, so an append (which only writes in place at the region's end)
+; first copies the frames, making them the scene's own again, and a
+; recycled scene does not park them. Clobbers rax, r8.
+scene_borrow_frames:
+    SCENE_PTR r8, rdi
+    mov     [r8 + SC_FRAMES], rsi
+    mov     [r8 + SC_COUNT], edx
+    add     [r8 + SC_EASE_TOTAL], ecx
+    and     dword [r8 + SC_FLAGS], ~(SCF_SHAPE | SCF_SHARED)
+    or      dword [r8 + SC_FLAGS], SCF_BORROWED
+    mov     eax, [rsi + FR_HANDLE]      ; the head: frame 0
+    mov     [r8 + SC_HEAD_HANDLE], eax
+    mov     eax, [rsi + FR_DURATION]
+    mov     [r8 + SC_HEAD_DURATION], eax
+    mov     dword [r8 + SC_TICKS], 0
+    ret
 
 ; scene_append_frames(edi=scene, rsi=frames, rdx=count): append a list of
 ; frames (FRAME_SIZE records, e.g. another scene's SC_FRAMES) in one go -
@@ -414,7 +437,7 @@ scene_append_frames:
     lea     rdi, [rdi + rcx * FRAME_SIZE]
     mov     [frame_region_end], rdi
     add     [r8 + SC_EASE_TOTAL], r11d
-    and     dword [r8 + SC_FLAGS], ~(SCF_SHAPE | SCF_SHARED)
+    and     dword [r8 + SC_FLAGS], ~(SCF_SHAPE | SCF_SHARED | SCF_BORROWED)
 .none:
     ret
 
@@ -736,7 +759,7 @@ scene_copy:
     mov     [r8 + SC_NEXT], r9d
     mov     [r8 + SC_NAME], r13d
     mov     [r8 + SC_OWNER], ebx
-    and     dword [r8 + SC_FLAGS], ~SCF_SHARED
+    and     dword [r8 + SC_FLAGS], ~(SCF_SHARED | SCF_BORROWED)
     ; the frames are the clone's own, at the end of the frame region
     mov     rsi, [r8 + SC_FRAMES]
     mov     rdi, [frame_region_end]

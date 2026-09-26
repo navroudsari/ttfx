@@ -644,8 +644,8 @@ scene_recycle:
 .have_table:
     lea     r8, [r8 + rbx * 8]
     xor     eax, eax
-    test    dword [rbp + SC_FLAGS], SCF_SYNC
-    jnz     .park                       ; share_table may hand them out
+    test    dword [rbp + SC_FLAGS], SCF_SYNC | SCF_BORROWED
+    jnz     .park                       ; others' frames (share_table's, or lent)
     mov     ecx, [rbp + SC_COUNT]
     mov     rdx, [r8]
     mov     rax, rdx
@@ -865,7 +865,7 @@ scene_append_recycled:
     add     [r8 + SC_EASE_TOTAL], edx
     lea     esi, [rcx + 1]
     mov     [r8 + SC_COUNT], esi
-    and     dword [r8 + SC_FLAGS], ~(SCF_SHAPE | SCF_SHARED)
+    and     dword [r8 + SC_FLAGS], ~(SCF_SHAPE | SCF_SHARED | SCF_BORROWED)
     cmp     ecx, [r8 + SC_HEAD]
     jne     .done
     mov     [r8 + SC_HEAD_HANDLE], eax
