@@ -138,6 +138,30 @@ huge-page control); and finally SIMD (batched motion 8 or 4 lanes wide, an 8-lan
 the render thread. The slowest effects (orbittingvolley, spray, fireworks, binarypath,
 unstable) are bound by the main thread's motion batch, whose groups are sparse.
 
+**Machine-level pass (2026-09-26, Cascade Lake).** Two changes below the instruction
+level, found by profiling on an Intel Xeon (Cascade Lake, model 85) with THP in `madvise`
+mode:
+
+- *Huge pages.* The engine was tuned where THP is `always`. Where it is `madvise`
+  (Ubuntu's and Fedora's default) every region faulted in 4 KB at a time: 54,000 faults
+  for binarypath, and kernel time was 14% of the whole suite. `reserve` now asks for
+  huge pages (`MADV_HUGEPAGE`); `reserve_small` still opts out, and the spanning tree's
+  sparse weight buckets moved out of the arena into a `reserve_small` region. mmap leaves
+  each mapping at an arbitrary offset in a 2 MB page, so a region's head keeps 4 KB pages
+  and a region that stays small never commits 2 MB. Aligning regions, or fixing the head's
+  length, measured 3-4% slower; so did a two-stage software prefetch of scene records and
+  frames in `update` (the misses moved, the time did not).
+- *JCC erratum layout.* On Skylake-derived cores a 32-byte chunk holding a branch (or a
+  macro-fused compare and branch) that crosses or ends on a 32-byte boundary never enters
+  the uop cache. 15% of the engine's branches did, and 41% of its profile samples landed
+  in such chunks. `tools/asm/jcc-pad.py` (run by build.rs for every tier; opt out with
+  `TTFX_ASM_JCC_PAD=0`) assembles NASM's preprocessed output with a listing and moves
+  each such branch to the next boundary: redundant DS prefixes on the plain integer
+  instructions before it, a NOP where they can't absorb it. The instructions are unchanged;
+  only their addresses move. Tier 4: 1,222 branches, 2,797 prefixes, 1,707 NOP bytes.
+  Unmeasured on AMD, where the erratum does not exist: A/B it there with
+  `tools/asm/ab.py` before relying on it.
+
 **Next:**
 
 - pack sparse motion-batch lanes before the vector work;
