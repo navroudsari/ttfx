@@ -42,8 +42,9 @@ colorshift_build:
     push    r13
     push    r14
     push    r15
-    sub     rsp, 24                     ; [rsp] = frame counter, [rsp+8] = spectrum
-                                        ; index, [rsp+16] = the symbol's memo entry
+    sub     rsp, 40                     ; [rsp] = frame counter, [rsp+8] = spectrum
+                                        ; index, [rsp+16] = the symbol's memo entry,
+                                        ; [rsp+24] = borrowing (cs_borrows)
     call    cs_final_color_map
     call    cs_gradient
     mov     edi, FILTER_INPUT
@@ -72,6 +73,8 @@ colorshift_build:
     call    cs_symbol_handles
     mov     r15, rax
     mov     [rsp + 16], rdx
+    call    cs_borrows
+    mov     [rsp + 24], rax
     mov     rax, [cs_len]
     mov     [rsp], rax
 .frame:
@@ -97,8 +100,8 @@ colorshift_build:
     xor     eax, eax
 .wrapped:
     mov     [rsp + 8], rax
-    call    cs_borrows
-    jnz     .next_frame
+    cmp     qword [rsp + 24], 0
+    jne     .next_frame
     mov     edi, r14d
     mov     rdx, [effect_config]
     mov     edx, [rdx + COLORSHIFT.frames]
@@ -108,8 +111,8 @@ colorshift_build:
     jnz     .frame
     ; the visuals exist (made in the same order as before); plain frames
     ; are a view of the symbol's cycle from k on, which [rsp + 8] is again
-    call    cs_borrows
-    jz      .own_frames
+    cmp     qword [rsp + 24], 0
+    je      .own_frames
     mov     rdx, [rsp + 16]
     mov     rsi, [rdx + 16]
     test    rsi, rsi
@@ -256,7 +259,7 @@ colorshift_build:
     inc     rbx
     jmp     .char
 .built:
-    add     rsp, 24
+    add     rsp, 40
     pop     r15
     pop     r14
     pop     r13
@@ -306,7 +309,7 @@ cs_symbol_handles:
     mov     [rdx + 8], rax
     ret
 
-; cs_borrows(r14d=the gradient scene) -> ZF clear when its frames can be a
+; cs_borrows(r14d=the gradient scene) -> rax != 0 when its frames can be a
 ; view of the symbol's cycle (cs_cycle_frames): scene_add_frame_visual would
 ; store the cached visuals as they are - no preexisting colors to rebuild
 ; them with - and the duration is valid (else it fails, as before).
@@ -318,7 +321,7 @@ cs_borrows:
     mov     rax, [effect_config]
     cmp     dword [rax + COLORSHIFT.frames], 1
     jl      .no
-    or      eax, 1                      ; ZF clear
+    mov     eax, 1
     ret
 .no:
     xor     eax, eax
