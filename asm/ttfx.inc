@@ -129,6 +129,7 @@ global %1
 
 %define NONE_I64            0x8000000000000001  ; "absent" for i64 values
 %define MADV_DONTNEED       4
+%define MADV_HUGEPAGE       14
 %define MADV_NOHUGEPAGE     15
 %define SYS_munmap          11
 %define SYS_madvise         28

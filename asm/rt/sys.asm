@@ -169,6 +169,17 @@ exit:
 ; array would wait on a store to another (4K aliasing). Each region's base
 ; is therefore staggered by region_index * (4096 + 192) bytes, which gives
 ; every region its own 64-byte line offset within a page.
+;
+; Regions ask for transparent huge pages. The engine was tuned where THP is
+; "always"; where it is "madvise" (Ubuntu's and Fedora's default, among
+; others) the dense regions - the arena, frames, scenes, paths - would fault
+; in 4 KB at a time (54,000 faults for binarypath) and every scattered record
+; access would walk the page tables. mmap places the mapping at no
+; particular offset in a 2 MB page, and a huge page cannot straddle the
+; mapping's start, so a region's first stretch keeps 4 KB pages: a region
+; that stays small never commits a whole 2 MB. Aligning every region to put
+; that head on a huge page, or fixing the head's length, measured 3-4%
+; slower overall. Regions that stay sparse use reserve_small.
 %define REGION_STAGGER  (4096 + 192)
 reserve:
     mov     eax, [region_count]
@@ -195,6 +206,15 @@ reserve:
     mov     [rdx + rcx], rax
     mov     [rdx + rcx + 8], rdi
     inc     dword [region_count]
+    ; transparent huge pages for the mapping (reserve_small opts out)
+    push    rax
+    push    rsi
+    mov     rsi, rdi
+    mov     rdi, rax
+    mov     edx, MADV_HUGEPAGE
+    SYSCALL SYS_madvise                 ; no THP: EINVAL, and 4 KB pages
+    pop     rsi
+    pop     rax
     add     rax, rsi
     ret
 .fail:

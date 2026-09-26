@@ -307,8 +307,8 @@ pw_new:
     shl     rax, 3
     mov     [pw_bucket_bytes], rax
     imul    rdi, rax, ST_WEIGHTS
-    call    alloc
-    mov     [pw_buckets], rax
+    call    reserve_small               ; sparse: most of each bucket stays
+    mov     [pw_buckets], rax           ; empty (not the huge-page arena)
     mov     edi, 1
     call    st_array
     mov     [pw_order], rax
