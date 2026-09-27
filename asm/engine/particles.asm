@@ -644,8 +644,8 @@ scene_recycle:
 .have_table:
     lea     r8, [r8 + rbx * 8]
     xor     eax, eax
-    test    dword [rbp + SC_FLAGS], SCF_SYNC | SCF_BORROWED
-    jnz     .park                       ; others' frames (share_table's, or lent)
+    test    dword [rbp + SC_FLAGS], SCF_SYNC | SCF_BORROWED | SCF_LENT
+    jnz     .park                       ; frames others may see (share_table's, lent)
     mov     ecx, [rbp + SC_COUNT]
     mov     rdx, [r8]
     mov     rax, rdx

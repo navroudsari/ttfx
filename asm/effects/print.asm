@@ -202,13 +202,9 @@ pr_make_row:
     call    visual_run_find
     test    rax, rax
     jz      .head_template
-    mov     eax, [rax]                  ; the template scene
-    shl     rax, SCENE_SHIFT
-    add     rax, [scenes]
+    mov     esi, [rax]                  ; the template scene
     mov     edi, r15d
-    mov     rsi, [rax + SC_FRAMES]
-    mov     edx, [rax + SC_COUNT]
-    call    scene_append_frames
+    call    scene_append_scene
     jmp     .activate
 .head_template:
     push    rcx                         ; the empty memo entry

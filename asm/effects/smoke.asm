@@ -264,13 +264,9 @@ smk_character:
     mov     edx, [smk_smoke_template]
     test    edx, edx
     jz      .smoke_first
-    dec     edx
-    shl     rdx, SCENE_SHIFT
-    add     rdx, [scenes]
+    lea     esi, [rdx - 1]
     mov     edi, ebp
-    mov     rsi, [rdx + SC_FRAMES]
-    mov     edx, [rdx + SC_COUNT]
-    call    scene_append_frames
+    call    scene_append_scene
     jmp     .event
 .smoke_first:
     lea     ecx, [rbp + 1]

@@ -36,6 +36,7 @@
 ; shared frame lists (see scene_share)
 %define SCF_SHARED          (1 << 16)   ; looked up since the last append
 %define SCF_BORROWED        (1 << 17)   ; frames are a view of someone's list
+%define SCF_LENT            (1 << 18)   ; others have a view of its frames
 %define SHARE_MAX_FRAMES    64
 %define SHARE_BITS          16
 %define SHARE_SIZE          (1 << SHARE_BITS)   ; 16-byte entries: list, count, tag
@@ -335,6 +336,8 @@ scene_append_frame:
     lea     rdi, [rdi + rcx * FRAME_SIZE]   ; where the next frame goes
     cmp     rdi, [frame_region_end]
     jne     .relocate
+    test    dword [r8 + SC_FLAGS], SCF_BORROWED
+    jnz     .relocate                   ; the frames after the view aren't its
 .append:
     mov     r9d, edx
     shl     r9, 32
@@ -388,6 +391,29 @@ scene_borrow_frames:
     mov     dword [r8 + SC_TICKS], 0
     ret
 
+; scene_append_scene(edi=scene, esi=source scene): append the source's
+; frames. An empty scene borrows them instead (scene_borrow_frames): the
+; source is marked lent, so recycling never hands its block out. Clobbers
+; rax, rcx, rdx, rsi, rdi, r8-r11.
+scene_append_scene:
+    SCENE_PTR r9, rsi
+    mov     edx, [r9 + SC_COUNT]
+    mov     rsi, [r9 + SC_FRAMES]
+    SCENE_PTR r8, rdi
+    test    edx, edx
+    jz      scene_append_frames         ; (nothing to append)
+    cmp     dword [r8 + SC_COUNT], 0
+    jne     scene_append_frames
+    or      dword [r9 + SC_FLAGS], SCF_LENT
+    xor     ecx, ecx                    ; the durations' sum
+    xor     eax, eax
+.sum:
+    add     ecx, [rsi + rax * FRAME_SIZE + FR_DURATION]
+    inc     eax
+    cmp     eax, edx
+    jb      .sum
+    jmp     scene_borrow_frames
+
 ; scene_append_frames(edi=scene, rsi=frames, rdx=count): append a list of
 ; frames (FRAME_SIZE records, e.g. another scene's SC_FRAMES) in one go -
 ; scene_add_frame_visual for each, without re-checking durations or
@@ -404,7 +430,10 @@ scene_append_frames:
     shl     rdi, FRAME_SHIFT
     add     rdi, [r8 + SC_FRAMES]
     cmp     rdi, [frame_region_end]
-    je      .append
+    jne     .relocate
+    test    dword [r8 + SC_FLAGS], SCF_BORROWED
+    jz      .append
+.relocate:
     ; relocate this scene's frames to the end of the region
     mov     rsi, [r8 + SC_FRAMES]
     mov     rdi, [frame_region_end]
@@ -759,15 +788,11 @@ scene_copy:
     mov     [r8 + SC_NEXT], r9d
     mov     [r8 + SC_NAME], r13d
     mov     [r8 + SC_OWNER], ebx
-    and     dword [r8 + SC_FLAGS], ~(SCF_SHARED | SCF_BORROWED)
-    ; the frames are the clone's own, at the end of the frame region
-    mov     rsi, [r8 + SC_FRAMES]
-    mov     rdi, [frame_region_end]
-    mov     [r8 + SC_FRAMES], rdi
-    mov     ecx, [r8 + SC_COUNT]
-    shl     ecx, FRAME_SHIFT
-    rep     movsb
-    mov     [frame_region_end], rdi
+    ; the clone's frames are a view of the source's (see scene_borrow_frames):
+    ; the source is marked so that recycling never hands its block out
+    and     dword [r8 + SC_FLAGS], ~(SCF_SHARED | SCF_LENT)
+    or      dword [r8 + SC_FLAGS], SCF_BORROWED
+    or      dword [rsi + SC_FLAGS], SCF_LENT
     pop     rax
     pop     r13
     pop     r12
